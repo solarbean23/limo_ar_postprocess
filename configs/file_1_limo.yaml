@@ -1,0 +1,101 @@
+input:
+  video_path: /home/lsbean991/Downloads/limo_video/file_1/DJI_20000710120811_0008_D.LRF.lrf
+  bag_path: /home/lsbean991/Downloads/limo_video/file_1/limo_mission_20260525_214255_0.db3
+  metadata_path: /home/lsbean991/Downloads/limo_video/file_1/metadata.yaml
+  homography_path: configs/homography.yaml
+
+output:
+  path: outputs/file_1_preview_10s.mp4
+
+render:
+  mode: wide_with_map
+  start_sec: 0.0
+  end_sec: null
+  max_frames: null
+  fps: null
+  codec: mp4v
+
+sync:
+  time_offset_sec: 0.0
+
+world:
+  x_min: -2.0
+  x_max: 2.0
+  y_min: -2.0
+  y_max: 2.0
+
+base_area:
+  x_min: -2.0
+  x_max: 0.0
+  y_min: 0.0
+  y_max: 2.0
+
+topics:
+  fire_state: /world/fire/state
+  target_state: /world/target/state
+  base_pose: /world/base/pose
+
+robots:
+  - id: Rescue_Limo_1
+    role: rescue
+    label: Rescue Limo 1
+    short_label: R
+    pose_topic: /Rescue_Limo_1/pose_world
+
+  - id: Fire_Limo_1
+    role: fire
+    label: Fire Limo 1
+    short_label: F1
+    pose_topic: /Fire_Limo_1/pose_world
+
+  - id: Fire_Limo_2
+    role: fire
+    label: Fire Limo 2
+    short_label: F2
+    pose_topic: /Fire_Limo_2/pose_world
+
+objects:
+  targets:
+    - id: Target_1
+      x: 1.0
+      y: 1.0
+      active: true
+    - id: Target_2
+      x: 1.0
+      y: -1.0
+      active: true
+  fires:
+    - id: Fire_1
+      x: 0.5
+      y: 1.5
+      active: true
+    - id: Fire_2
+      x: 0.5
+      y: -0.5
+      active: true
+    - id: Fire_3
+      x: 1.2
+      y: 1.2
+      active: false
+    - id: Fire_4
+      x: -1.0
+      y: -1.0
+      active: false
+
+visual:
+  draw_video_overlay: true
+  draw_map: true
+  draw_connectors: true
+  fire_suppress_duration_sec: 2.0
+  video_robot_ring_radius_px: 26
+  video_robot_ring_thickness_px: 3
+  video_robot_ellipse_ratio: 0.55
+  video_fire_radius_px: 24
+  video_target_size_px: 18
+  map_robot_length_px: 34
+  map_robot_width_px: 22
+  map_fire_radius_px: 18
+  map_target_size_px: 18
+  alpha_base: 0.28
+  alpha_fire: 0.55
+  alpha_connector: 0.35

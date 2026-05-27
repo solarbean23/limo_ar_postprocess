@@ -1,0 +1,9 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+.mypy_cache/
+data/
+outputs/*.mp4
+outputs/*.avi
+outputs/*.mov
+outputs/*.mkv
