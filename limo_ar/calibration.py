@@ -79,6 +79,7 @@ def main() -> None:
     parser.add_argument("--world-points", required=True)
     parser.add_argument("--output", required=True)
     parser.add_argument("--frame-sec", type=float, default=0.0)
+    parser.add_argument("--save-frame")
     args = parser.parse_args()
 
     world_points = load_world_points(args.world_points)
@@ -91,6 +92,11 @@ def main() -> None:
     cap.release()
     if not ok:
         raise SystemExit("could not read calibration frame")
+    if args.save_frame:
+        save_path = Path(args.save_frame)
+        save_path.parent.mkdir(parents=True, exist_ok=True)
+        cv2.imwrite(str(save_path), frame)
+        print(f"saved calibration frame: {save_path}")
 
     image_points: list[list[float]] = []
     window = "limo_ar_calibration"

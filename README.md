@@ -48,3 +48,20 @@ bag_t = video_t + time_offset_sec
 
 If `homography.yaml` is missing, the renderer skips video-space AR overlay and still renders
 the right-side map for `wide_with_map`.
+
+## Homography
+
+Create or update `configs/homography.yaml` by clicking image points in the same order as
+`configs/file_1_world_points.yaml`:
+
+```bash
+python -m limo_ar.calibration \
+  --video /path/to/DJI_20000710120811_0008_D.LRF.lrf \
+  --world-points configs/file_1_world_points.yaml \
+  --output configs/homography.yaml \
+  --frame-sec 0.0 \
+  --save-frame outputs/calibration_frame.jpg
+```
+
+If the four field corners are not visible, replace `file_1_world_points.yaml` with four or
+more visible known world points such as field markers or object positions.

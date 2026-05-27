@@ -41,6 +41,7 @@ class VisualObject:
     active: bool
     status: str = "active"
     radius_scale: float = 1.0
+    radius_m: float | None = None
 
 
 @dataclass(frozen=True)
@@ -63,6 +64,7 @@ class _ObjectEvent:
     x: float | None = None
     y: float | None = None
     status: str = ""
+    radius_m: float | None = None
 
 
 class LimoTimeline:
@@ -84,9 +86,13 @@ class LimoTimeline:
             for robot in config.get("robots", [])
             if robot.get("id")
         }
+        self.robot_pose_samples = {
+            robot_id: _prepare_pose_samples(samples, self.visual_cfg)
+            for robot_id, samples in bag.robot_poses.items()
+        }
         self._robot_pose_times = {
             robot_id: [sample.t for sample in samples]
-            for robot_id, samples in bag.robot_poses.items()
+            for robot_id, samples in self.robot_pose_samples.items()
         }
         self._base_pose_times = [sample.t for sample in bag.base_poses]
 
@@ -94,6 +100,7 @@ class LimoTimeline:
         self._target_initial = _load_static_objects(config, "targets", DEFAULT_TARGETS)
         self._fire_events = self._build_events("fire", self._fire_initial)
         self._target_events = self._build_events("target", self._target_initial)
+        self._fire_suppress_windows = self._build_fire_suppress_windows()
         self._target_done_times = self._first_inactive_times(self._target_events)
 
     @property
@@ -105,7 +112,7 @@ class LimoTimeline:
             robot_id: pose
             for robot_id, pose in (
                 (robot_id, self._interpolate_pose(samples, self._robot_pose_times[robot_id], t))
-                for robot_id, samples in self.bag.robot_poses.items()
+                for robot_id, samples in self.robot_pose_samples.items()
             )
             if pose is not None
         }
@@ -132,7 +139,7 @@ class LimoTimeline:
         return {
             "duration_sec": self.duration_sec,
             "robots": {
-                robot_id: len(samples) for robot_id, samples in self.bag.robot_poses.items()
+            robot_id: len(samples) for robot_id, samples in self.bag.robot_poses.items()
             },
             "base_pose_samples": len(self.bag.base_poses),
             "fire_state_messages": len(self.bag.fire_states),
@@ -161,6 +168,10 @@ class LimoTimeline:
         }
         samples = self.bag.fire_states if kind == "fire" else self.bag.target_states
         known_ids = set(initial)
+        current_active = {
+            object_id: bool(object_events[-1].active)
+            for object_id, object_events in events.items()
+        }
         for sample in samples:
             parsed = parse_state_message(sample.text, kind, known_ids)
             for object_id, info in parsed.items():
@@ -179,6 +190,7 @@ class LimoTimeline:
                                 active=bool(info.get("active", True)),
                                 x=info.get("x"),
                                 y=info.get("y"),
+                                radius_m=info.get("radius_m"),
                             )
                         ],
                     )
@@ -193,8 +205,25 @@ class LimoTimeline:
                         x=info.get("x"),
                         y=info.get("y"),
                         status=status,
+                        radius_m=info.get("radius_m"),
                     )
                 )
+                current_active[object_id] = bool(active)
+
+            if kind == "fire" and _message_has_authoritative_fire_list(sample.text):
+                parsed_ids = set(parsed)
+                for object_id in list(known_ids):
+                    if current_active.get(object_id, False) and object_id not in parsed_ids:
+                        events.setdefault(object_id, []).append(
+                            _ObjectEvent(
+                                t=sample.t,
+                                active=False,
+                                x=None,
+                                y=None,
+                                status="suppressed",
+                            )
+                        )
+                        current_active[object_id] = False
 
         for object_events in events.values():
             object_events.sort(key=lambda event: event.t)
@@ -214,16 +243,17 @@ class LimoTimeline:
             event = object_events[max(idx, 0)]
             x = event.x if event.x is not None else initial.get(object_id, {}).get("x", 0.0)
             y = event.y if event.y is not None else initial.get(object_id, {}).get("y", 0.0)
+            radius_m = event.radius_m or initial.get(object_id, {}).get("radius_m")
             active = event.active
             radius_scale = 1.0
 
             if kind == "fire":
-                next_inactive = _next_inactive_event(object_events, t)
-                duration = float(self.visual_cfg.get("fire_suppress_duration_sec", 2.0))
-                if active and next_inactive and duration > 0:
-                    start = next_inactive.t - duration
-                    if start <= t <= next_inactive.t:
-                        radius_scale = max(0.0, min(1.0, (next_inactive.t - t) / duration))
+                suppress_window = self._fire_suppress_windows.get(object_id)
+                if active and suppress_window:
+                    start, end = suppress_window
+                    if start <= t <= end:
+                        span = max(end - start, 1e-9)
+                        radius_scale = max(0.0, min(1.0, (end - t) / span))
                 if not active:
                     continue
 
@@ -237,6 +267,7 @@ class LimoTimeline:
                 active=active,
                 status=event.status,
                 radius_scale=radius_scale,
+                radius_m=radius_m,
             )
         return objects
 
@@ -268,6 +299,67 @@ class LimoTimeline:
             yaw=left_yaw + yaw_delta * alpha,
         )
 
+    def _build_fire_suppress_windows(self) -> dict[str, tuple[float, float]]:
+        windows: dict[str, tuple[float, float]] = {}
+        fire_robot_ids = [
+            robot_id
+            for robot_id, role in self.robot_roles.items()
+            if role == "fire" and robot_id in self.robot_pose_samples
+        ]
+        fallback_duration = float(self.visual_cfg.get("fire_suppress_duration_sec", 2.0))
+        lookback = float(self.visual_cfg.get("fire_suppress_max_window_sec", 10.0))
+        start_distance = float(self.visual_cfg.get("fire_suppress_start_distance_m", 0.55))
+        min_duration = float(self.visual_cfg.get("fire_suppress_min_duration_sec", 1.0))
+
+        for fire_id, events in self._fire_events.items():
+            inactive = _first_inactive_after_active(events)
+            if inactive is None:
+                continue
+            fire_x, fire_y = _object_position_at(
+                events,
+                self._fire_initial.get(fire_id, {}),
+                inactive.t,
+            )
+            arrival_start = self._first_fire_robot_arrival_time(
+                fire_robot_ids,
+                fire_x,
+                fire_y,
+                max(0.0, inactive.t - lookback),
+                inactive.t,
+                start_distance,
+            )
+            if arrival_start is None:
+                start = inactive.t - fallback_duration
+                if min_duration > 0.0 and inactive.t - start < min_duration:
+                    start = inactive.t - min_duration
+            else:
+                start = arrival_start
+            start = max(0.0, min(start, inactive.t))
+            if inactive.t > start:
+                windows[fire_id] = (start, inactive.t)
+        return windows
+
+    def _first_fire_robot_arrival_time(
+        self,
+        robot_ids: list[str],
+        fire_x: float,
+        fire_y: float,
+        start_t: float,
+        end_t: float,
+        distance_m: float,
+    ) -> float | None:
+        first: float | None = None
+        for robot_id in robot_ids:
+            for sample in self.robot_pose_samples.get(robot_id, []):
+                if sample.t < start_t:
+                    continue
+                if sample.t > end_t:
+                    break
+                if math.hypot(sample.x - fire_x, sample.y - fire_y) <= distance_m:
+                    first = sample.t if first is None else min(first, sample.t)
+                    break
+        return first
+
     @staticmethod
     def _first_inactive_times(events: dict[str, list[_ObjectEvent]]) -> dict[str, float]:
         done: dict[str, float] = {}
@@ -278,6 +370,53 @@ class LimoTimeline:
                     break
         return done
 
+    def robot_pose_summary(self) -> dict[str, dict[str, Any]]:
+        summary: dict[str, dict[str, Any]] = {}
+        for robot_id, samples in self.robot_pose_samples.items():
+            if not samples:
+                summary[robot_id] = {"samples": 0}
+                continue
+            summary[robot_id] = {
+                "samples": len(samples),
+                "first": _pose2d(samples[0]),
+                "last": _pose2d(samples[-1]),
+            }
+        return summary
+
+    def fire_event_summary(self) -> dict[str, dict[str, Any]]:
+        return self._event_summary(self._fire_events, first_seen_active=True)
+
+    def target_event_summary(self) -> dict[str, dict[str, Any]]:
+        return self._event_summary(self._target_events, first_seen_active=True)
+
+    @staticmethod
+    def _event_summary(
+        events: dict[str, list[_ObjectEvent]],
+        first_seen_active: bool,
+    ) -> dict[str, dict[str, Any]]:
+        summary: dict[str, dict[str, Any]] = {}
+        for object_id, object_events in sorted(events.items()):
+            first_seen = None
+            inactive = None
+            x = None
+            y = None
+            for event in object_events:
+                if first_seen is None and (event.active or not first_seen_active):
+                    first_seen = event.t
+                if event.x is not None and event.y is not None:
+                    x = event.x
+                    y = event.y
+                if event.active and first_seen is None:
+                    first_seen = event.t
+                if inactive is None and not event.active and first_seen is not None:
+                    inactive = event.t
+            summary[object_id] = {
+                "first_seen": first_seen,
+                "inactive": inactive,
+                "position": (x, y) if x is not None and y is not None else None,
+            }
+        return summary
+
 
 def parse_state_message(
     text: str,
@@ -285,10 +424,19 @@ def parse_state_message(
     known_ids: set[str] | None = None,
 ) -> dict[str, dict[str, Any]]:
     known_ids = known_ids or set()
-    parsed: dict[str, dict[str, Any]] = {}
     loaded = _load_structured_text(text)
+
+    if isinstance(loaded, dict):
+        parsed = _parse_project_state_dict(loaded, kind)
+        if parsed:
+            return parsed
+
+    parsed: dict[str, dict[str, Any]] = {}
     if loaded is not None and not isinstance(loaded, str):
         _collect_structured(loaded, kind, parsed)
+        if parsed:
+            return parsed
+
     _collect_from_regex(text, kind, parsed)
 
     lowered = text.lower()
@@ -301,6 +449,39 @@ def parse_state_message(
             parsed.setdefault(object_id, {})["active"] = False
             parsed[object_id]["status"] = "suppressed"
     return parsed
+
+
+def _parse_project_state_dict(obj: dict[str, Any], kind: str) -> dict[str, dict[str, Any]]:
+    root_key = "fires" if kind == "fire" else "targets"
+    items = obj.get(root_key)
+    if not isinstance(items, list):
+        return {}
+    parsed: dict[str, dict[str, Any]] = {}
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        object_id = _normalize_id(item.get("id") or item.get("name"), kind)
+        if not object_id:
+            continue
+        info = _info_from_mapping(item)
+        if "status_name" in item:
+            status = str(item["status_name"])
+            info["status"] = status
+            active_from_status = _active_from_status(status)
+            if active_from_status is not None:
+                info["active"] = active_from_status
+        if "active" in item:
+            info["active"] = bool(item["active"])
+        parsed[object_id] = info
+    return parsed
+
+
+def _message_has_authoritative_fire_list(text: str) -> bool:
+    try:
+        obj = json.loads(text)
+    except Exception:
+        return False
+    return isinstance(obj, dict) and isinstance(obj.get("fires"), list)
 
 
 def _load_static_objects(
@@ -319,8 +500,137 @@ def _load_static_objects(
             "x": float(obj.get("x", 0.0)),
             "y": float(obj.get("y", 0.0)),
             "active": bool(obj.get("active", True)),
+            "radius_m": float(obj["radius_m"]) if "radius_m" in obj else None,
         }
     return output
+
+
+def _prepare_pose_samples(samples: list[PoseSample], visual_cfg: dict[str, Any]) -> list[PoseSample]:
+    if not samples or not bool(visual_cfg.get("pose_preprocess_enabled", True)):
+        return samples
+    ordered = sorted(samples, key=lambda sample: sample.t)
+    clustered = _collapse_pose_time_clusters(
+        ordered,
+        float(visual_cfg.get("pose_cluster_dt_sec", 0.002)),
+    )
+    filtered = _reject_pose_spikes(
+        clustered,
+        float(visual_cfg.get("pose_filter_max_speed_mps", 2.4)),
+        float(visual_cfg.get("pose_filter_step_margin_m", 0.04)),
+    )
+    return _smooth_pose_samples(
+        filtered,
+        float(visual_cfg.get("pose_preprocess_window_sec", 0.18)),
+    )
+
+
+def _collapse_pose_time_clusters(samples: list[PoseSample], cluster_dt: float) -> list[PoseSample]:
+    if cluster_dt <= 0.0 or len(samples) < 2:
+        return samples
+    output: list[PoseSample] = []
+    group: list[PoseSample] = []
+
+    def flush() -> None:
+        if not group:
+            return
+        if len(group) == 1:
+            output.append(group[0])
+            return
+        if output:
+            prev = output[-1]
+            chosen = min(group, key=lambda sample: _pose_distance(prev, sample))
+        else:
+            chosen = group[len(group) // 2]
+        output.append(chosen)
+
+    for sample in samples:
+        if not group:
+            group = [sample]
+            continue
+        if sample.t - group[-1].t <= cluster_dt:
+            group.append(sample)
+            continue
+        flush()
+        group = [sample]
+    flush()
+    return output
+
+
+def _reject_pose_spikes(
+    samples: list[PoseSample],
+    max_speed_mps: float,
+    step_margin_m: float,
+) -> list[PoseSample]:
+    if len(samples) < 3 or max_speed_mps <= 0.0:
+        return samples
+    output = [samples[0]]
+    for sample in samples[1:]:
+        prev = output[-1]
+        dt = sample.t - prev.t
+        if dt <= 0.0:
+            continue
+        distance = _pose_distance(prev, sample)
+        allowed = step_margin_m + max_speed_mps * dt
+        if distance > allowed and dt < 0.18:
+            continue
+        output.append(sample)
+    return output
+
+
+def _smooth_pose_samples(samples: list[PoseSample], window_sec: float) -> list[PoseSample]:
+    if len(samples) < 3 or window_sec <= 0.0:
+        return samples
+    times = [sample.t for sample in samples]
+    half_window = window_sec * 0.5
+    sigma = max(window_sec / 3.0, 1e-6)
+    output: list[PoseSample] = []
+    left = 0
+    right = 0
+    for idx, sample in enumerate(samples):
+        t = sample.t
+        while left < len(samples) and times[left] < t - half_window:
+            left += 1
+        while right < len(samples) and times[right] <= t + half_window:
+            right += 1
+        weight_sum = 0.0
+        x = y = z = qx = qy = qz = qw = 0.0
+        for item in samples[left:right]:
+            dt = item.t - t
+            weight = math.exp(-0.5 * (dt / sigma) ** 2)
+            weight_sum += weight
+            x += item.x * weight
+            y += item.y * weight
+            z += item.z * weight
+            qx += item.qx * weight
+            qy += item.qy * weight
+            qz += item.qz * weight
+            qw += item.qw * weight
+        if weight_sum <= 0.0:
+            output.append(sample)
+            continue
+        norm = math.sqrt(qx * qx + qy * qy + qz * qz + qw * qw)
+        if norm <= 1e-9:
+            qx, qy, qz, qw = sample.qx, sample.qy, sample.qz, sample.qw
+        else:
+            qx, qy, qz, qw = qx / norm, qy / norm, qz / norm, qw / norm
+        output.append(
+            PoseSample(
+                t=sample.t,
+                x=x / weight_sum,
+                y=y / weight_sum,
+                z=z / weight_sum,
+                qx=qx,
+                qy=qy,
+                qz=qz,
+                qw=qw,
+                frame_id=sample.frame_id,
+            )
+        )
+    return output
+
+
+def _pose_distance(left: PoseSample, right: PoseSample) -> float:
+    return math.hypot(left.x - right.x, left.y - right.y)
 
 
 def _pose2d(sample: PoseSample) -> Pose2D:
@@ -339,11 +649,31 @@ def _point_in_area(x: float, y: float, area: dict[str, float]) -> bool:
     )
 
 
-def _next_inactive_event(events: list[_ObjectEvent], t: float) -> _ObjectEvent | None:
+def _first_inactive_after_active(events: list[_ObjectEvent]) -> _ObjectEvent | None:
+    seen_active = False
     for event in events:
-        if event.t >= t and not event.active:
+        if event.active:
+            seen_active = True
+        elif seen_active:
             return event
     return None
+
+
+def _object_position_at(
+    events: list[_ObjectEvent],
+    initial: dict[str, Any],
+    t: float,
+) -> tuple[float, float]:
+    x = initial.get("x", 0.0)
+    y = initial.get("y", 0.0)
+    for event in events:
+        if event.t > t:
+            break
+        if event.x is not None:
+            x = event.x
+        if event.y is not None:
+            y = event.y
+    return float(x), float(y)
 
 
 def _load_structured_text(text: str) -> Any:
@@ -444,10 +774,19 @@ def _info_from_mapping(mapping: dict[str, Any]) -> dict[str, Any]:
         if "x" in position and "y" in position:
             info["x"] = float(position["x"])
             info["y"] = float(position["y"])
+    elif "position" in mapping and isinstance(mapping["position"], (list, tuple)):
+        position = mapping["position"]
+        if len(position) >= 2:
+            info["x"] = float(position[0])
+            info["y"] = float(position[1])
+    if "radius" in mapping and mapping["radius"] is not None:
+        info["radius_m"] = float(mapping["radius"])
+    if "radius_m" in mapping and mapping["radius_m"] is not None:
+        info["radius_m"] = float(mapping["radius_m"])
     for key in ("active", "is_active", "enabled"):
         if key in mapping:
             info["active"] = bool(mapping[key])
-    for key in ("state", "status", "phase"):
+    for key in ("state", "status", "phase", "status_name"):
         if key in mapping:
             status = str(mapping[key])
             info["status"] = status

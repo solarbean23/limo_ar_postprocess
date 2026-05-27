@@ -1,7 +1,7 @@
 input:
-  video_path: /home/lsbean991/Downloads/limo_video/file_1/DJI_20000710120811_0008_D.LRF.lrf
-  bag_path: /home/lsbean991/Downloads/limo_video/file_1/limo_mission_20260525_214255_0.db3
-  metadata_path: /home/lsbean991/Downloads/limo_video/file_1/metadata.yaml
+  video_path: /home/lsbean991/workspace/archive/ar_process/limo_video/file_1/DJI_20000710120811_0008_D.MP4.mp4
+  bag_path: /home/lsbean991/workspace/archive/ar_process/limo_video/file_1/limo_mission_20260525_214255_0.db3
+  metadata_path: /home/lsbean991/workspace/archive/ar_process/limo_video/file_1/metadata.yaml
   homography_path: configs/homography.yaml
 
 output:
@@ -13,10 +13,17 @@ render:
   end_sec: null
   max_frames: null
   fps: null
+  video_sampling: blend
+  resize_height: 720
   codec: mp4v
 
 sync:
-  time_offset_sec: 0.0
+  time_offset_sec: 5.2
+  time_scale: 1.0
+  sample_at_source_frame_time: true
+
+map:
+  display_transform: rotate_ccw_90
 
 world:
   x_min: -2.0
@@ -26,8 +33,8 @@ world:
 
 base_area:
   x_min: -2.0
-  x_max: 0.0
-  y_min: 0.0
+  x_max: -0.38
+  y_min: 0.38
   y_max: 2.0
 
 topics:
@@ -86,16 +93,108 @@ visual:
   draw_video_overlay: true
   draw_map: true
   draw_connectors: true
+  draw_video_robot_rings: false
   fire_suppress_duration_sec: 2.0
   video_robot_ring_radius_px: 26
   video_robot_ring_thickness_px: 3
   video_robot_ellipse_ratio: 0.55
+  video_robot_ring_radius_m: 0.18
+  video_robot_ring_length_m: 0.50
+  video_robot_ring_width_m: 0.34
   video_fire_radius_px: 24
+  video_fire_radius_m_default: 0.2
+  video_fire_radius_m_scale: 1.0
   video_target_size_px: 18
+  video_target_half_size_m: 0.08
+  video_robot_label_offset_px: [0, -24]
+  video_robot_label_offset_px_by_id:
+    Rescue_Limo_1: [0, -30]
+    Fire_Limo_1: [0, -28]
+    Fire_Limo_2: [0, -28]
+  video_robot_label_lock_to_center: true
+  video_robot_label_close_distance_px: 150
+  video_robot_label_separation_px: 58
+  draw_video_label_leaders: false
+  video_label_leader_min_distance_px: 34
+  video_label_leader_alpha: 0.38
+  map_robot_shape: car
   map_robot_length_px: 34
   map_robot_width_px: 22
+  map_robot_triangle_length_px: 42
+  map_robot_triangle_width_px: 24
   map_fire_radius_px: 18
   map_target_size_px: 18
-  alpha_base: 0.28
-  alpha_fire: 0.55
-  alpha_connector: 0.35
+  map_target_rotation_deg: -30.0
+  map_alpha_fire: 0.34
+  alpha_base: 0.20
+  alpha_base_robot_bonus: 0.02
+  alpha_base_max: 0.34
+  alpha_fire: 0.48
+  alpha_connector: 0.24
+  info_panel_enabled: true
+  info_panel_height_ratio: 0.32
+  info_panel_min_height_px: 210
+  map_panel_min_size_px: 430
+  pose_smoothing_tau_sec: 0.0
+  pose_preprocess_enabled: true
+  pose_cluster_dt_sec: 0.002
+  pose_filter_max_speed_mps: 2.4
+  pose_filter_step_margin_m: 0.04
+  pose_preprocess_window_sec: 0.08
+  rescue_safe_radius_m: 1.0
+  video_safe_radius_x_scale: 0.75
+  video_safe_radius_y_scale: 1.25
+  video_safe_radius_yaw_deg: -8.0
+  video_ground_shear_x_per_y: -0.08
+  fire_suppress_start_distance_m: 0.2
+  fire_suppress_max_window_sec: 10.0
+  fire_suppress_min_duration_sec: 1.0
+  video_robot_refine_enabled: false
+  video_robot_refine_roles: [rescue, fire]
+  video_robot_refine_search_px: 80
+  video_robot_refine_max_shift_px: 90
+  video_robot_refine_search_px_by_role:
+    rescue: 48
+    fire: 82
+  video_robot_refine_max_shift_px_by_role:
+    rescue: 34
+    fire: 90
+  video_robot_refine_min_area_px_by_role:
+    rescue: 55
+    fire: 45
+  video_robot_tracking_enabled: true
+  video_tracking_updates_map: false
+  video_tracking_map_blend: 1.0
+  video_robot_tracking_smoothing_tau_sec: 0.006
+  video_robot_tracking_candidate_limit: 12
+  video_robot_tracking_max_distance_px_by_role:
+    rescue: 125
+    fire: 130
+  video_robot_tracking_area_bonus_by_role:
+    rescue: 0.07
+    fire: 0.006
+  video_robot_tracking_max_step_margin_px: 2.0
+  video_robot_tracking_max_step_px_per_sec_by_role:
+    rescue: 300
+    fire: 460
+  video_robot_tracking_min_area_px_by_role:
+    rescue: 140
+    fire: 120
+  video_robot_tracking_max_area_px_by_role:
+    rescue: 8000
+    fire: 7000
+  video_robot_tracking_max_bbox_width_px_by_role:
+    rescue: 125
+    fire: 125
+  video_robot_tracking_max_bbox_height_px_by_role:
+    rescue: 110
+    fire: 95
+  draw_robot_links: true
+  alpha_robot_link: 0.22
+  robot_link_color_bgr: [150, 156, 154]
+  draw_robot_trails: false
+  trail_duration_sec: 1.2
+  trail_step_sec: 0.25
+  map_robot_ring_radius_px: 24
+  map_robot_ring_thickness_px: 2
+  map_fire_radius_m_scale: 0.7
